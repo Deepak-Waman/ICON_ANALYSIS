@@ -1,0 +1,1 @@
+This branch contains jupyter notebooks that validates the microphysical properties for CAIPEEX, DCMEX, MC3E, & STEPS. These properties are LWC, DCNC, IWC, & TINC. For ORCESTRA, EarthCare data needs to be processed, so no such validation is shown in the current notebook of orcestra. In future, this should be done!
