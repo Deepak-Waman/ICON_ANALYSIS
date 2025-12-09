@@ -1,0 +1,684 @@
+#! /bin/bash
+#=============================================================================
+
+# levante cpu batch job parameters
+
+#SBATCH --account=bk1415
+#SBATCH --job-name=test_aes_bubble
+#SBATCH --partition=compute
+#SBATCH --chdir=/work/bk1415/b382718/output/wk82_bubble/aes_1mom/energy_conservation/with_ec
+#SBATCH --nodes=6
+# the following is needed to work around a bug that otherwise leads to
+# a too low number of ranks when using compute,compute2 as queue
+#SBATCH --mem=0
+#SBATCH --output=/work/bk1415/b382718/output/wk82_bubble/aes_1mom/energy_conservation/with_ec/LOG.exp.wk_bubble_1mom_aes.run.%j.o
+#SBATCH --error=/work/bk1415/b382718/output/wk82_bubble/aes_1mom/energy_conservation/with_ec/LOG.exp.wk_bubble_1mom_aes.run.%j.o
+#SBATCH --exclusive
+#SBATCH --time=08:00:00
+
+#=============================================================================
+set -x
+ulimit -s unlimited
+#=============================================================================
+# OpenMP environment variables
+# ----------------------------
+export OMP_NUM_THREADS=4
+export ICON_THREADS=$OMP_NUM_THREADS
+export OMP_SCHEDULE="guided"
+export OMP_DYNAMIC="false"
+export OMP_STACKSIZE=500M
+
+#
+# MPI variables
+# -------------
+no_of_nodes=${SLURM_JOB_NUM_NODES:=1}
+mpi_procs_pernode=$((128 / OMP_NUM_THREADS))
+((mpi_total_procs=no_of_nodes * mpi_procs_pernode))
+#=============================================================================
+# load local setting, if existing
+# -------------------------------
+if [ -a ../setting ]
+then
+  echo "Load Setting"
+  . ../setting
+fi
+
+# environment variables for the experiment and the target system
+# --------------------------------------------------------------
+export KMP_AFFINITY="granularity=fine,scatter"
+export KMP_LIBRARY="turnaround"
+export OMPI_MCA_pml="ucx"
+export OMPI_MCA_btl=self
+export OMPI_MCA_osc="pt2pt"
+export UCX_IB_ADDR_TYPE=ib_global
+export OMPI_MCA_coll="^ml"
+export OMPI_MCA_coll_hcoll_enable="1"
+export HCOLL_ENABLE_MCAST_ALL="1"
+export HCOLL_MAIN_IB=mlx5_0:1
+export UCX_NET_DEVICES=mlx5_0:1
+export UCX_TLS=mm,knem,cma,dc_mlx5,dc_x,self
+export UCX_UNIFIED_MODE=y
+export HDF5_USE_FILE_LOCKING=FALSE
+export OMPI_MCA_io="romio321"
+export MALLOC_TRIM_THRESHOLD_="-1"
+export MKL_ENABLE_INSTRUCTIONS=AVX2
+export MKL_DEBUG_CPU_TYPE=5
+export UCX_HANDLE_ERRORS=bt
+# load profile
+# ------------
+if [[ -a  /etc/profile ]]
+then
+        . /etc/profile
+fi
+#=============================================================================
+# directories with absolute paths
+# -------------------------------
+basedir="/home/b/b382718/icon_energy_conservation/icon-nwp"
+export basedir
+# how to start the icon model
+# ---------------------------
+mask="0xf,0xf0000,0xf00000000,0xf000000000000,0xf0000000000000000,0xf00000000000000000000,0xf000000000000000000000000,0xf0000000000000000000000000000,0xf0,0xf00000,0xf000000000,0xf0000000000000,0xf00000000000000000,0xf000000000000000000000,0xf0000000000000000000000000,0xf00000000000000000000000000000,0xf00,0xf000000,0xf0000000000,0xf00000000000000,0xf000000000000000000,0xf0000000000000000000000,0xf00000000000000000000000000,0xf000000000000000000000000000000,0xf000,0xf0000000,0xf00000000000,0xf000000000000000,0xf0000000000000000000,0xf00000000000000000000000,0xf000000000000000000000000000,0xf0000000000000000000000000000000"
+export START="srun -l --kill-on-bad-exit=1 --nodes=${SLURM_JOB_NUM_NODES:-1} --ntasks=$((no_of_nodes * mpi_procs_pernode)) --propagate=STACK,CORE --distribution=block:block --cpu-bind=v,mask_cpu=$mask "
+export MODEL="${basedir}/bin/icon"
+
+# --------------------------
+submit="sbatch"
+job_name="exp.wk_bubble_1mom_aes.run"
+. ${basedir}/run/add_run_routines
+#=============================================================================
+
+ulimit -s $((4 * 1024 * 1024))
+ulimit -c 0
+
+#-----------------------------------------------------------------------------
+export EXPNAME="wk_bubble_1mom_aes"
+
+# atmo namelist filename
+atmo_namelist=NAMELIST_${EXPNAME}_atm
+
+# directories definition
+#RUNSCRIPTDIR=
+
+#-----------------------------------------------------------------------------
+# global timing
+syyyy=2008
+smm=08
+sdd=01
+shh=00
+emm=08
+edd=01
+ehh=02
+
+start_date="${syyyy}-${smm}-${sdd}T${shh}:00:00Z"
+end_date="${syyyy}-${emm}-${edd}T${ehh}:00:00Z" 
+
+start_date_out="${syyyy}-${smm}-${sdd}T${shh}:00:00Z"
+end_date_out="${syyyy}-${emm}-${edd}T${ehh}:00:00Z"
+
+calendar="360 day year"
+
+# restart intervals
+checkpoint_interval="P1D"
+restart_interval="P1D"
+
+# output intervals
+output_interval3d="PT30S"
+file_interval3d="P1D"
+
+# output intervals
+output_interval2d="PT30S"
+file_interval2d="P1D"
+
+FILETYPE=5
+#-----------------------------------------------------------------------------
+# model parameters
+model_equations=3             # equation system
+#                     1=hydrost. atm. T
+#                     1=hydrost. atm. theta dp
+#                     3=non-hydrost. atm.,
+#                     0=shallow water model
+#                    -1=hydrost. ocean
+#-----------------------------------------------------------------------------
+
+# experiment directory, with plenty of space, create if new
+
+EXPDIR=/work/bk1415/b382718/output/wk82_bubble/aes_1mom/energy_conservation/with_ec/${EXPNAME}
+if [ ! -d ${EXPDIR} ] ;  then
+  mkdir -p ${EXPDIR}
+fi
+#
+ls -ld ${EXPDIR}
+if [ ! -d ${EXPDIR} ] ;  then
+    mkdir ${EXPDIR}
+fi
+ls -ld ${EXPDIR}
+check_error $? "${EXPDIR} does not exist?"
+
+cd ${EXPDIR}
+
+#-----------------------------------------------------------------------------
+# input data - Grid and data pool
+
+icon_data_poolFolder="${icon_data_rootFolder:-/pool/data/ICON}/grids/public/mpim"
+
+#grids_folder=${icon_data_poolFolder}/Torus_Triangles_20x4_5000m
+#grid_name=Torus_Triangles_20x4_5000m
+
+grids_folder=${icon_data_poolFolder}/Torus_Triangles_100x116_1000m
+grid_name=Torus_Triangles_100x116_1000m
+
+# Copy grid file
+cp ${grids_folder}/${grid_name}.nc ${grid_name}.nc
+
+# Copy radiation data
+ln -sf ${basedir}/data/rrtmgp-gas-lw-g128.nc         ./coefficients_lw.nc
+ln -sf ${basedir}/data/rrtmgp-gas-sw-g112.nc         ./coefficients_sw.nc
+ln -sf ${basedir}/data/ECHAM6_CldOptProps_rrtmgp_lw.nc ./rrtmgp-cloud-optics-coeffs-lw.nc
+ln -sf ${basedir}/data/ECHAM6_CldOptProps_rrtmgp_sw.nc ./rrtmgp-cloud-optics-coeffs-sw.nc
+
+# Copy lookup table for microphysics
+ln -sf ${basedir}/data/dmin_wetgrowth_lookup.nc ./
+
+# Ozone boundary conditions
+datadir=${icon_data_poolFolder}/Torus_Triangles_20x22_5000m/r0006
+ln -sf ${datadir}/rcemip_analytical_o3_20x22_5000m_echam_plev.nc ./bc_ozone.nc
+
+cp $HOME/.bashrc bashrc
+cp ${basedir}/config.log .
+
+cp $basedir/run/exp.${EXPNAME}.run .
+cp $basedir/run/exp.${EXPNAME}.run $EXPDIR/
+
+# ----------------------------------------------------------------------------
+# grid namelist settings
+# ----------------------------------------------------------------------------
+atmo_dyn_grids="${grid_name}.nc"
+dynamics_grid_filename="'${grid_name}.nc',"
+
+#-----------------------------------------------------------------------------
+# Model required files - ECRAD data
+RADDIR=$basedir/externals/ecrad/data
+
+ln -sf ${RADDIR}/ae*.nc .
+ln -sf ${RADDIR}/b*.nc .
+ln -sf ${RADDIR}/e*.nc .
+ln -sf ${RADDIR}/f*.nc .
+ln -sf ${RADDIR}/m*.nc .
+ln -sf ${RADDIR}/s*.nc .
+ln -sf ${RADDIR}/y*.nc .
+ln -sf ${RADDIR}/RAD* .
+
+#=============================================================================
+
+# create ICON namelist parameters
+
+cat > ${atmo_namelist} << EOF
+&parallel_nml
+ nproma         = 16  ! optimal setting 8 for CRAY; use 16 or 24 for IBM
+ p_test_run     = .false.
+ l_test_openmp  = .false.
+ l_log_checks   = .false.
+ num_io_procs   = 4   ! asynchronous output for values >= 1
+ io_process_stride = 6
+ num_prefetch_proc = 1
+ num_restart_procs = 1
+/
+
+&grid_nml
+ dynamics_grid_filename = ${dynamics_grid_filename}
+ grid_angular_velocity  = 0.
+/
+
+&run_nml
+ ltestcase                   =                     .TRUE.        ! testcase run
+ num_lev                     =                         90         ! number of full levels (atm.)
+ dtime                       =                         5.        ! timestep in seconds
+ ldynamics                   =                      .TRUE.        ! compute adiabatic dynamic tendencies
+ ltransport                  =                      .TRUE.        ! compute large-scale tracer transport
+ ntracer                     =                          6         ! number of advected tracers (hus,clw,cli,qr,qs,qg)
+ iforcing                    =                          2         ! forcing: 0=none, 1=HS, 2=ECHAM, 3=NWP
+ msg_level                   =                         12         ! detailed report during integration
+ ltimer                      =                      .TRUE.        ! timer for monitoring the runtime of specific routines
+ timers_level                =                         10         ! performance timer granularity
+ check_uuid_gracefully       =                      .TRUE.        ! give only warnings for non-matching uuids
+ output                      =                       "nml"        ! main switch for enabling/disabling components of the model output
+ activate_sync_timers        =                      .TRUE.
+ profiling_output            =                          1         ! aggregated: 1; detailed: 2; in files: 3
+/
+
+
+!&nh_testcase_nml
+! nh_test_name     = 'aes_bubble'
+! ape_sst_case     = 'sst_const'
+! ape_sst_val      = 30.
+! zenithang        = 42.05       ! degrees
+! sol_const        = 551.58
+!/
+
+!&aes_bubble_nml
+! aes_bubble_config%t0  	       = 300.0  ! Surface temperature (K)
+! aes_bubble_config%tgr         = 6.5e-3     ! Lapse rate (K/m) - 6.5 K/km
+! aes_bubble_config%h_tropo     = 12000.0    ! Tropopause height (m)
+! aes_bubble_config%t_tropo     = 213.0      ! Tropopause temperature (K)
+! 
+!/
+
+&nh_testcase_nml
+ nh_test_name     = 'aes_bubble'
+ ape_sst_case     = 'sst_const'
+ ape_sst_val      = 30.
+ zenithang        = 42.05       ! degrees
+ sol_const        = 551.58
+/
+
+&aes_bubble_nml
+ aes_bubble_config%psfc        =101325.
+ aes_bubble_config%t0          =303.15
+ aes_bubble_config%gamma0      =0.009
+ aes_bubble_config%gamma1      =0.00001
+ aes_bubble_config%z0          =3000.
+ aes_bubble_config%t_perturb   =10.
+ aes_bubble_config%relhum_bg   =0.7
+ aes_bubble_config%relhum_mx   =0.95
+ aes_bubble_config%hw_x        =12500.
+ aes_bubble_config%hw_z        =500.
+ aes_bubble_config%x_center    =0.
+/
+
+&dynamics_nml
+ iequations                  =                          3         ! type of equations and prognostic variables
+ divavg_cntrwgt              =                          0.50      ! weight of central cell for divergence averaging
+ lcoriolis                   =                      .FALSE.       ! Coriolis force (off for idealized bubble)
+/
+
+&nonhydrostatic_nml
+ iadv_rhotheta               =                          2         ! advection method for rho and rhotheta
+ ivctype                     =                          2         ! type of vertical coordinate
+ itime_scheme                =                          4         ! time integration scheme
+ ndyn_substeps               =                          5         ! dtime/dt_dyn
+ exner_expol                 =                          0.333     ! temporal extrapolation of Exner function
+ vwind_offctr                =                          0.2       ! off-centering in vertical wind solver
+ damp_height                 =                      22500.0       ! height at which Rayleigh damping of vertical wind starts
+ rayleigh_coeff              =                          0.10      ! Rayleigh damping coefficient
+ divdamp_fac                 =                          0.002     ! scaling factor for divergence damping
+ divdamp_order               =                          4         ! order of divergence damping 
+ divdamp_type                =                         32         ! type of divergence damping
+ igradp_method               =                          3         ! discretization of horizontal pressure gradient
+ l_zdiffu_t                  =                      .TRUE.        ! specifies computation of Smagorinsky temperature diffusion
+ thslp_zdiffu                =                          0.02      ! slope threshold (temperature diffusion)
+ thhgtd_zdiffu               =                        125.0       ! threshold of height difference (temperature diffusion)
+ htop_moist_proc             =                      22500.0       ! max. height for moist physics
+/
+
+&sleve_nml
+ min_lay_thckn               =                         20.0       ! layer thickness of lowermost layer
+ itype_laydistr              =                          1
+ top_height                  =                      30000.0       ! height of model top
+ stretch_fac                 =                          0.7       ! stretching factor to vary distribution of model levels
+ decay_scale_1               =                       4000.0       ! decay scale of large-scale topography component
+ decay_scale_2               =                       2500.0       ! decay scale of small-scale topography component
+ decay_exp                   =                          1.2       ! exponent of decay function
+ flat_height                 =                      30000.0       ! height above which the coordinate surfaces are flat
+/
+
+&transport_nml
+ tracer_names                =          'hus','clw','cli','qr','qs','qg'
+ ivadv_tracer                =              3,    3,    3,   3,   3,   3
+ itype_hlimit                =              3,    4,    4,   4,   4,   4
+ ihadv_tracer                =             20,   20,   20,  20,  20,  20
+ llsq_svd                    =                     .FALSE.
+ beta_fct                    =                          1.005
+/
+
+&interpol_nml
+ rbf_scale_mode_ll           =                          1
+ rbf_vec_scale_c             =                          0.45
+ rbf_vec_scale_v             =                          0.45
+ rbf_vec_scale_e             =                          0.45
+/
+
+&diffusion_nml
+ lhdiff_vn                   =                      .TRUE.        ! diffusion on the horizontal wind field
+ lhdiff_temp                 =                      .TRUE.        ! diffusion on the temperature field
+ hdiff_order                 =                          5         ! order of nabla operator for diffusion
+ itype_vn_diffu              =                          1         ! reconstruction method used for Smagorinsky diffusion
+ itype_t_diffu               =                          2         ! discretization of temperature diffusion
+ hdiff_efdt_ratio            =                         24.0       ! ratio of e-folding time to time step 
+ hdiff_smag_fac              =                          0.025     ! scaling factor for Smagorinsky diffusion
+/
+
+&aes_phy_nml
+!
+! atmospheric physics
+ aes_phy_config(1)%dt_rad = "PT2M"
+ aes_phy_config(1)%dt_vdf = "PT10S"
+ aes_phy_config(1)%dt_mig = "PT10S"
+ aes_phy_config(1)%dt_two = ""
+!
+! surface (.TRUE. or .FALSE.)
+ aes_phy_config(1)%ljsb      = .FALSE.
+ aes_phy_config(1)%lamip     = .FALSE.
+ aes_phy_config(1)%l2moment  = .FALSE.
+ aes_phy_config(1)%lice      = .FALSE.
+ aes_phy_config(1)%lmlo      = .FALSE.
+ aes_phy_config(1)%llake     = .FALSE.
+!
+! fix negative humidity
+ aes_phy_config(1)%iqneg_d2p = 2
+ aes_phy_config(1)%iqneg_p2d = 2
+! set htop_moist_proc also as top of graupel calculation
+ aes_phy_config(1)%zmaxcloudy = 22500.
+/
+
+&aes_rad_nml
+!
+! radiation settings
+ aes_rad_config(1)%isolrad    =  5
+ aes_rad_config(1)%l_orbvsop87= .FALSE.
+ aes_rad_config(1)%cecc       = 0.0
+ aes_rad_config(1)%cobld      = 0.0
+ aes_rad_config(1)%ldiur      = .FALSE.
+ aes_rad_config(1)%l_sph_symm_irr = .TRUE.
+ aes_rad_config(1)%irad_h2o   =  1
+ aes_rad_config(1)%irad_co2   =  2
+ aes_rad_config(1)%irad_ch4   =  2
+ aes_rad_config(1)%irad_n2o   =  2
+ aes_rad_config(1)%irad_o3    =  0
+ aes_rad_config(1)%irad_o2    =  0
+ aes_rad_config(1)%irad_cfc11 =  0
+ aes_rad_config(1)%irad_cfc12 =  0
+ aes_rad_config(1)%irad_aero  =  0
+/
+
+&aes_vdf_nml
+! aes_vdf_config(1)%pr0         = 0.7
+ aes_vdf_config(1)%use_tmx     = .TRUE.
+ aes_vdf_config(1)%use_louis   = .TRUE.
+ aes_vdf_config(1)%turb        = 2 ! 1: TTE, 2: Smagorinsky (only 2 for use_tmx=true)
+ aes_vdf_config(1)%solver_type = 2 ! for tmx only; 1: explicit solver, 2: implicit solver
+ aes_vdf_config(1)%energy_type = 2 ! for tmx only; use 1: dry static energy, 2: internal energy
+/
+
+&aes_cop_nml
+ aes_cop_config(1)%cn1lnd     =  50.0
+ aes_cop_config(1)%cn2lnd     = 220.0
+ aes_cop_config(1)%cn1sea     =  50.0
+ aes_cop_config(1)%cn2sea     = 100.0
+ aes_cop_config(1)%cinhomi    =   1.0
+ aes_cop_config(1)%cinhoml_cfl=   1.0
+ aes_cop_config(1)%cinhoml_cfo=   1.0
+ aes_cop_config(1)%cinhoml_sf =   1.0
+/
+
+&aes_cov_nml
+ aes_cov_config(1)%cqx        = 1.e-6
+/
+
+&io_nml
+ lmask_boundary              =                     .FALSE.        ! mask out interpolation zone in output
+ lflux_avg                   = .FALSE. ! false: accumulated fluxes
+ itype_pres_msl              = 4
+ itype_rh                    = 1       ! RH w.r.t. water
+ restart_file_type           = 5       ! 4: netcdf2, 5: netcdf4
+ output_nml_dict             = "dict.${EXPNAME}"
+ netcdf_dict                 = "dict.${EXPNAME}"
+ lnetcdf_flt64_output        = .TRUE.
+ inextra_3d                  = 0
+ inextra_2d                  = 0
+/
+
+&output_nml
+ filetype                    =                          5         ! output format: 2=GRIB2, 4=NETCDFv2, 5=netcdf4
+ dom                         =                         -1         ! write all domains
+ output_bounds               =               0., 0., 1800.        ! output: start, end, increment
+ steps_per_file              =                          1         ! number of output steps in one output file
+ mode                        =                          1         ! 1: relative t-axis, 2: absolute t-axis
+ include_last                =                      .FALSE.
+ output_filename             =        'ICONCONST_icongrid'        ! file name base
+ filename_format             = '<output_filename>_<levtype_l>'
+ output_grid                 =                      .TRUE.        ! flag whether grid information is added to output.
+ remap                       =                          0         ! 1: remap to lat-lon grid
+ ml_varlist                  = 'clon', 'clat', 'areacella', 'zghalf', 'zg'
+/
+
+&output_nml
+ filetype                    =                          5  ! output format: 5=NETCDFv4
+ dom                         =                         -1  ! write all domains
+ output_bounds               =            0.,7200.,600.  ! start, end, increment
+ steps_per_file              =                          1  ! number of steps per file
+ steps_per_file_inclfirst    =                     .FALSE. ! first step not counted
+ mode                        =                          1  ! 1: forecast mode (relative t-axis)
+/
+
+! aes_vdf_config(1)%pr0         = 0.7
+! aes_vdf_config(1)%use_tmx     = .TRUE.
+! aes_vdf_config(1)%use_louis   = .TRUE.
+! aes_vdf_config(1)%turb        = 2 ! 1: TTE, 2: Smagorinsky (only 2 for use_tmx=true)
+! aes_vdf_config(1)%solver_type = 2 ! for tmx only; 1: explicit solver, 2: implicit solver
+! aes_vdf_config(1)%energy_type = 2 ! for tmx only; use 1: dry static energy, 2: internal energy
+!/
+
+&aes_cop_nml
+ aes_cop_config(1)%cn1lnd     =  50.0
+ aes_cop_config(1)%cn2lnd     = 220.0
+ aes_cop_config(1)%cn1sea     =  50.0
+ aes_cop_config(1)%cn2sea     = 100.0
+ aes_cop_config(1)%cinhomi    =   1.0
+ aes_cop_config(1)%cinhoml_cfl=   1.0
+ aes_cop_config(1)%cinhoml_cfo=   1.0
+ aes_cop_config(1)%cinhoml_sf =   1.0
+/
+
+&aes_cov_nml
+ aes_cov_config(1)%cqx        = 1.e-6
+/
+
+&io_nml
+ lmask_boundary              =                     .FALSE.        ! mask out interpolation zone in output
+ lflux_avg                   = .FALSE. ! false: accumulated fluxes
+ itype_pres_msl              = 4
+ itype_rh                    = 1       ! RH w.r.t. water
+ restart_file_type           = 5       ! 4: netcdf2, 5: netcdf4
+ output_nml_dict             = "dict.${EXPNAME}"
+ netcdf_dict                 = "dict.${EXPNAME}"
+ lnetcdf_flt64_output        = .TRUE. include_last                =                     .FALSE.
+ output_filename             =          '${EXPNAME}_atm_3d'
+ filename_format             = '<output_filename>_<levtype_l>_<datetime2>'
+ output_grid                 =                      .TRUE.
+ remap                       =                          0  ! no remapping
+ ml_varlist                  = 'ps', 'pfull', 'zg',
+                               'rho', 'ta', 'theta_v',
+                               'ua', 'va', 'wa',
+                               'hus', 'clw', 'cli',
+                               'qr', 'qs', 'qg', 'cptgz'
+/
+
+&output_nml
+ filetype                    =                          5  ! output format: 5=NETCDFv4
+ dom                         =                         -1  ! write all domains
+ output_bounds               =            0.,7200.,600.  ! start, end, increment
+ steps_per_file              =                          1  ! number of steps per file
+ steps_per_file_inclfirst    =                     .FALSE.
+ mode                        =                          1  ! 1: forecast mode (relative t-axis)
+ include_last                =                     .FALSE.
+ output_filename             =          '${EXPNAME}_atm_2d'
+ filename_format             = '<output_filename>_<levtype_l>_<datetime2>'
+ output_grid                 =                      .TRUE.
+ remap                       =                          0
+ ml_varlist                  = 'ps', 'psl', 'ts', 'clt',
+                               'prw', 'cllvi', 'clivi',
+                               'qrvi', 'qsvi', 'qgvi',
+                               'hfls', 'hfss', 'evspsbl',
+                               'prlr', 'prls', 'cptgzvi',
+                               'pr_rain', 'pr_snow', 'pr_grpl', 'pr_ice'
+/
+
+
+
+&output_nml
+ filetype                    =                          5  ! output format: 5=NETCDFv4
+ dom                         =                         -1  ! write all domains
+ output_bounds               =            0.,7200.,600.  ! start, end, increment
+ steps_per_file              =                          1  ! number of steps per file
+ steps_per_file_inclfirst    =                     .FALSE.
+ mode                        =                          1  ! 1: forecast mode (relative t-axis)
+ include_last                =                     .FALSE.
+ output_filename             =          '${EXPNAME}_atm_3d'
+ filename_format             = '<output_filename>_<levtype_l>_<datetime2>'
+ output_grid                 =                      .TRUE.
+ remap                       =                          0
+ ml_varlist                  = 'ps', 'pfull', 'zg',
+                               'rho', 'ta', 'theta_v',
+                               'ua', 'va', 'wa',
+                               'hus', 'clw', 'cli',
+                               'qr', 'qs', 'qg', 'cptgz'
+/
+
+EOF
+
+#=============================================================================
+#
+# This section of the run script prepares and starts the model integration. 
+#-----------------------------------------------------------------------------
+
+final_status_file=${EXPDIR}/${job_name}.final_status
+rm -f ${final_status_file}
+#-----------------------------------------------------------------------------
+
+# set up the model lists if they do not exist
+# this works for single model runs
+if [ x$namelist_list = x ]; then
+  minrank_list[0]=0
+  maxrank_list[0]=65535
+  incrank_list[0]=1
+  if [ x$atmo_namelist != x ]; then
+    # this is the atmo model
+    namelist_list[0]="$atmo_namelist"
+    modelname_list[0]="atmo"
+    modeltype_list[0]=1
+    run_atmo="true"
+  else
+    check_error 1 "No namelist is defined"
+  fi
+fi
+
+#-----------------------------------------------------------------------------
+# set some default values and derive some run parameteres
+restart=${restart:=".false."}
+restartSemaphoreFilename='isRestartRun.sem'
+#AUTOMATIC_RESTART_SETUP:
+if [ -f ${restartSemaphoreFilename} ]; then
+  restart=.true.
+fi
+#END AUTOMATIC_RESTART_SETUP
+
+run_atmo=${run_atmo="false"}
+if [ x$atmo_namelist != x ]; then
+  run_atmo="true"
+fi
+#-----------------------------------------------------------------------------
+
+read_restart_namelists=${read_restart_namelists:=".true."}
+
+#-----------------------------------------------------------------------------
+# create master_namelist
+master_namelist=icon_master.namelist
+
+cat > $master_namelist << EOF
+&master_nml
+ lrestart            = $restart
+ read_restart_namelists = $read_restart_namelists
+/
+&master_time_control_nml
+ calendar             = "$calendar"
+ checkpointTimeIntval = "$checkpoint_interval"
+ restartTimeIntval    = "$restart_interval"
+ experimentStartDate  = "$start_date"
+ experimentStopDate   = "$end_date"
+/
+&time_nml
+ is_relative_time = .false.
+/
+EOF
+
+#-----------------------------------------------------------------------------
+# add model component to master_namelist
+add_component_to_master_namelist()
+{
+  model_namelist_filename="$1"
+  model_name=$2
+  model_type=$3
+  model_min_rank=$4
+  model_max_rank=$5
+  model_inc_rank=$6
+
+cat >> $master_namelist << EOF
+&master_model_nml
+  model_name="$model_name"
+  model_namelist_filename="$model_namelist_filename"
+  model_type=$model_type
+  model_min_rank=$model_min_rank
+  model_max_rank=$model_max_rank
+  model_inc_rank=$model_inc_rank
+/
+EOF
+}
+#-----------------------------------------------------------------------------
+
+no_of_models=${#namelist_list[*]}
+echo "no_of_models=$no_of_models"
+
+j=0
+while [ $j -lt ${no_of_models} ]
+do
+  add_component_to_master_namelist "${namelist_list[$j]}" "${modelname_list[$j]}" ${modeltype_list[$j]} ${minrank_list[$j]} ${maxrank_list[$j]} ${incrank_list[$j]}
+  j=`expr ${j} + 1`
+done
+
+#-----------------------------------------------------------------------------
+# dictionary file for output variable names
+dict_file="dict.${EXPNAME}"
+cat ${basedir}/run/dict.iconam.mpim > ${dict_file}
+
+#-----------------------------------------------------------------------------
+# get model
+ls -l ${MODEL}
+check_error $? "${MODEL} does not exist?"
+#-----------------------------------------------------------------------------
+
+# start experiment
+rm -f finish.status
+date
+${START} ${MODEL}
+date
+
+if [ -r finish.status ] ; then
+  check_final_status 0 "${START} ${MODEL}"
+else
+  check_final_status -1 "${START} ${MODEL}"
+fi
+
+#-----------------------------------------------------------------------------
+finish_status=`cat finish.status`
+echo $finish_status
+echo "============================"
+echo "Script run successfully: $finish_status"
+echo "============================"
+#-----------------------------------------------------------------------------
+namelist_list=""
+#-----------------------------------------------------------------------------
+# check if we have to restart, ie resubmit
+if [ $finish_status = "RESTART" ]; then
+  echo "restart next experiment..."
+  this_script="${RUNSCRIPTDIR}/exp.${EXPNAME}.run"
+  echo 'this_script: ' "$this_script"
+  touch ${restartSemaphoreFilename}
+  sbatch ${basedir}/run/exp.${EXPNAME}.run
+else
+  [[ -f ${restartSemaphoreFilename} ]] && rm ${restartSemaphoreFilename}
+fi
+#-----------------------------------------------------------------------------
+
+cd ${RUNSCRIPTDIR}
+
+#-----------------------------------------------------------------------------

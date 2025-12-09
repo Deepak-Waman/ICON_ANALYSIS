@@ -1,0 +1,590 @@
+#! /bin/bash
+#=============================================================================
+
+# levante cpu batch job parameters
+
+#SBATCH --account=bk1415
+#SBATCH --job-name=test_nwp_bubble
+#SBATCH --partition=compute
+#SBATCH --chdir=/work/bk1415/b382718/output/wk82_bubble/nwp_2mom/energy_conservation/impl_2mom_solver/without_ec
+#SBATCH --nodes=6
+# the following is needed to work around a bug that otherwise leads to
+# a too low number of ranks when using compute,compute2 as queue
+#SBATCH --mem=0
+#SBATCH --output=/work/bk1415/b382718/output/wk82_bubble/nwp_2mom/energy_conservation/impl_2mom_solver/without_ec/LOG.exp.wk82_2mom_nwp_bubble.run.%j.o
+#SBATCH --error=/work/bk1415/b382718/output/wk82_bubble/nwp_2mom/energy_conservation/impl_2mom_solver/without_ec/LOG.exp.wk82_2mom_nwp_bubble.run.%j.o
+#SBATCH --exclusive
+#SBATCH --time=08:00:00
+
+#=============================================================================
+set -x
+ulimit -s unlimited
+#=============================================================================
+# OpenMP environment variables
+# ----------------------------
+export OMP_NUM_THREADS=4
+export ICON_THREADS=$OMP_NUM_THREADS
+export OMP_SCHEDULE="guided"
+export OMP_DYNAMIC="false"
+export OMP_STACKSIZE=500M
+
+#
+# MPI variables
+# -------------
+no_of_nodes=${SLURM_JOB_NUM_NODES:=1}
+mpi_procs_pernode=$((128 / OMP_NUM_THREADS))
+((mpi_total_procs=no_of_nodes * mpi_procs_pernode))
+#=============================================================================
+# load local setting, if existing
+# -------------------------------
+if [ -a ../setting ]
+then
+  echo "Load Setting"
+  . ../setting
+fi
+
+# environment variables for the experiment and the target system
+# --------------------------------------------------------------
+export KMP_AFFINITY="granularity=fine,scatter"
+export KMP_LIBRARY="turnaround"
+export OMPI_MCA_pml="ucx"
+export OMPI_MCA_btl=self
+export OMPI_MCA_osc="pt2pt"
+export UCX_IB_ADDR_TYPE=ib_global
+export OMPI_MCA_coll="^ml"
+export OMPI_MCA_coll_hcoll_enable="1"
+export HCOLL_ENABLE_MCAST_ALL="1"
+export HCOLL_MAIN_IB=mlx5_0:1
+export UCX_NET_DEVICES=mlx5_0:1
+export UCX_TLS=mm,knem,cma,dc_mlx5,dc_x,self
+export UCX_UNIFIED_MODE=y
+export HDF5_USE_FILE_LOCKING=FALSE
+export OMPI_MCA_io="romio321"
+export MALLOC_TRIM_THRESHOLD_="-1"
+export MKL_ENABLE_INSTRUCTIONS=AVX2
+export MKL_DEBUG_CPU_TYPE=5
+export UCX_HANDLE_ERRORS=bt
+# load profile
+# ------------
+if [[ -a  /etc/profile ]]
+then
+        . /etc/profile
+fi
+#=============================================================================
+# directories with absolute paths
+# -------------------------------
+#basedir="/home/b/b382718/icon-oct2024"
+basedir="/home/b/b382718/icon_energy_conservation/icon-nwp"
+
+export basedir
+
+# how to start the icon model
+# ---------------------------
+mask="0xf,0xf0000,0xf00000000,0xf000000000000,0xf0000000000000000,0xf00000000000000000000,0xf000000000000000000000000,0xf0000000000000000000000000000,0xf0,0xf00000,0xf000000000,0xf0000000000000,0xf00000000000000000,0xf000000000000000000000,0xf0000000000000000000000000,0xf00000000000000000000000000000,0xf00,0xf000000,0xf0000000000,0xf00000000000000,0xf000000000000000000,0xf0000000000000000000000,0xf00000000000000000000000000,0xf000000000000000000000000000000,0xf000,0xf0000000,0xf00000000000,0xf000000000000000,0xf0000000000000000000,0xf00000000000000000000000,0xf000000000000000000000000000,0xf0000000000000000000000000000000"
+export START="srun -l --kill-on-bad-exit=1 --nodes=${SLURM_JOB_NUM_NODES:-1} --ntasks=$((no_of_nodes * mpi_procs_pernode)) --propagate=STACK,CORE --distribution=block:block --cpu-bind=v,mask_cpu=$mask "
+#export START="srun -l --kill-on-bad-exit=1 --nodes=${SLURM_JOB_NUM_NODES:-1} --ntasks=$((no_of_nodes * mpi_procs_pernode)) --propagate=STACK,CORE --distribution=block:block "
+export MODEL="${basedir}/bin/icon"
+
+# --------------------------
+submit="sbatch"
+job_name="exp.wk82_2mom_nwp_bubble.run"
+. ${basedir}/run/add_run_routines
+#=============================================================================
+
+ulimit -s $((4 * 1024 * 1024))
+ulimit -c 0
+
+#-----------------------------------------------------------------------------
+# loading modules consistent with the icon config
+
+module purge
+module load git/2.43.3-gcc-11.2.0
+module load openmpi/4.1.2-intel-2021.5.0
+module load hdf5/1.12.1-openmpi-4.1.2-intel-2021.5.0
+module load netcdf-c/4.8.1-openmpi-4.1.2-intel-2021.5.0
+module load netcdf-fortran/4.5.3-openmpi-4.1.2-intel-2021.5.0
+module load eccodes/2.27.0-intel-2021.5.0
+
+export LD_LIBRARY_PATH="/sw/spack-levante/libfyaml-0.7.12-fvbhgo/lib:/sw/spack-levante/hdf5-1.12.1-tvymb5/lib:/sw/spack-levante/netcdf-c-4.8.1-2k3cmu/lib:/sw/spack-levante/netcdf-fortran-4.5.3-k6xq5g/lib:/sw/spack-levante/eccodes-2.27.0-dphsnu/lib64:/sw/spack-levante/netlib-lapack-3.9.1-rwhcz7/lib64"
+
+#-----------------------------------------------------------------------------
+export EXPNAME="wk82_2mom_nwp_bubble"
+
+# atmo namelist filename
+atmo_namelist=NAMELIST_${EXPNAME}_atm
+
+# directories definition
+#RUNSCRIPTDIR=
+
+#-----------------------------------------------------------------------------
+# global timing
+start_date="2025-01-01T00:00:00Z"
+end_date="2025-01-01T10:00:00Z"
+
+start_date_out="2025-01-01T00:00:00Z"
+end_date_out="2025-01-01T10:00:00Z"
+
+# restart intervals
+checkpoint_interval="P14D"
+restart_interval="P14D"
+
+# output intervals
+output_interval3d="PT10M"
+file_interval3d="PT10M"
+
+# output intervals
+output_interval2d="PT10M"
+file_interval2d="PT10M"
+
+# timesteps for AES physics
+modelTimeStep="PT5S"
+radiationTimeStep="PT2M"
+
+FILETYPE=5
+
+# regular  grid: nlat=96, nlon=192, npts=18432, dlat=1.875 deg, dlon=1.875 deg
+#reg_lat_def_reg=-90.0,1.0,90.0
+#reg_lon_def_reg=-180.0,1.0,180.0
+#-----------------------------------------------------------------------------
+# model parameters
+model_equations=3             # equation system
+#                     1=hydrost. atm. T
+#                     1=hydrost. atm. theta dp
+#                     3=non-hydrost. atm.,
+#                     0=shallow water model
+#                    -1=hydrost. ocean
+#-----------------------------------------------------------------------------
+
+# experiment directory, with plenty of space, create if new
+
+EXPDIR=/work/bk1415/b382718/output/wk82_bubble/nwp_2mom/energy_conservation/impl_2mom_solver/without_ec/${EXPNAME}
+
+if [ ! -d ${EXPDIR} ] ;  then
+  mkdir -p ${EXPDIR}
+fi
+#
+ls -ld ${EXPDIR}
+if [ ! -d ${EXPDIR} ] ;  then
+    mkdir ${EXPDIR}
+fi
+ls -ld ${EXPDIR}
+check_error $? "${EXPDIR} does not exist?"
+
+cd ${EXPDIR}
+
+#-----------------------------------------------------------------------------
+# input data
+
+#cp -r /work/bk1415/b382718/tools/grid-generator/grids/Torus_Triangles_100x100_1000m.nc iconDOM01-grid.nc
+#ln -sf /work/bk1415/b382718/tools/grid-generator/grids/Torus_Triangles_100x100_1000m.nc iconDOM01-grid.nc
+ln -sf /work/bk1415/b382718/output/wk82_bubble/grids/Torus_Triangles_100x100_1000m.nc iconDOM01-grid.nc
+
+# Model required files
+ln -sf $basedir/data/rrtmg_lw.nc              ./
+ln -sf $basedir/data/rrtmg_sw.nc              ./
+ln -sf $basedir/data/ECHAM6_CldOptProps.nc    ./
+ln -sf $basedir/data/dmin_wetgrowth_lookup.nc ./
+
+RADDIR=$basedir/externals/ecrad/data
+ln -sf ${RADDIR}/* .
+#=============================================================================
+
+# create ICON namelist parameters
+
+cat > ${atmo_namelist} << EOF
+&parallel_nml
+ nproma         = 16  ! optimal setting 8 for CRAY; use 16 or 24 for IBM
+ p_test_run     = .false.
+ l_test_openmp  = .false.
+ l_log_checks   = .false.
+ num_io_procs   = 20   ! asynchronous output for values >= 1
+ num_prefetch_proc = 1
+ num_restart_procs = 1
+/
+&grid_nml
+ dynamics_grid_filename  = 'iconDOM01-grid.nc'
+ is_plane_torus          = .true.
+ corio_lat               = 0.0
+/
+&run_nml
+ num_lev          = 90          ! number of full levels
+ dtime            = 5
+ ltestcase        = .TRUE.      ! run testcase
+ ldynamics        = .TRUE.      ! dynamics
+ ltransport       = .TRUE.      ! transport
+ iforcing         = 3           ! 0: none, 1: HS, 2: ECHAM, 3: NWP
+ output           = 'nml'
+ msg_level        = 7          ! level of details report during integration
+ ntracer     =  2               ! number of tracers - default 0
+/
+&dynamics_nml
+ iequations  = 3       ! 1: hydrost. atmosphere
+ lcoriolis   = .False.
+ divavg_cntrwgt  = 0.50
+/
+&les_nml
+ is_dry_cbl        = .FALSE.
+ isrfc_type        = 5      !2=Fixed flux, 5=fixed SST, 3=fixed bflux
+ sst               = 300.0
+ expname           = '${EXPNAME}'
+ avg_interval_sec = 900.
+ sampl_freq_sec   = 30.
+ ldiag_les_out     = .FALSE.
+/
+&nh_testcase_nml
+ nh_test_name  = 'wk82'    ! test case identifier
+ qv_max_wk     = 0.014
+ u_infty_wk    = 5.
+ bub_hor_width = 10000.
+ bub_ver_width = 1400.
+ bubctr_z      = 1400.
+ bub_amp       = 2.
+ !wk82_shear    = 0.0 
+/
+
+!&diffusion_nml
+! hdiff_order      = 5
+! hdiff_efdt_ratio = 17.5
+! hdiff_smag_fac   = 0.05
+! lhdiff_vn        = .TRUE.
+! lhdiff_temp      = .TRUE.
+! itype_t_diffu    = 2
+! hdiff_multfac    = 1.0
+! hdiff_tv_ratio   = 1.0
+!/
+
+! diffusion_nml: horizontal (numerical) diffusion ----------------------------
+&diffusion_nml
+ lhdiff_vn                   =                      .TRUE.        ! diffusion on the horizontal wind field
+ lhdiff_temp                 =                      .TRUE.        ! diffusion on the temperature field
+ hdiff_order                 =                          5         ! order of nabla operator for diffusion
+ itype_vn_diffu              =                          1         ! reconstruction method used for Smagorinsky diffusion
+ itype_t_diffu               =                          2         ! discretization of temperature diffusion
+ hdiff_efdt_ratio            =                         24.0       ! ratio of e-folding time to time step
+ hdiff_smag_fac              =                          0.025     ! scaling factor for Smagorinsky diffusion
+/
+
+&nwp_phy_nml
+ inwp_gscp       = 4 !1=cosmo-eu, 4=two moment
+ inwp_convection = 0 ! explicit
+ inwp_radiation  = 4 !4=ecRad
+ inwp_cldcover   = 1
+ inwp_turb       = 1 !1=cosmo, 5=les
+ inwp_satad      = 1
+ inwp_surface    = 0
+ dt_rad          = 600 ! very 10 min
+! ldiag_ddt_temp_dyn2 = .TRUE.
+! lcloudradonly   = .TRUE.
+/
+
+! twomom_mcrph_nml: switches for two moment mcrph scheme ------------------------------
+&twomom_mcrph_nml
+ i2mom_solver                =                          1         ! 0: explicit solver, 1:semi-implicit Euler-forward
+ i2mom_sedi_econserv         =                          .FALSE.   ! flag for energy conservation (ec) in precip sedimentation.
+                                                                  ! True/FALSE: Energy Econservation/No energy conservation
+
+&radiation_nml
+ izenith        = 0 ! Sun in zenith everywhere
+ irad_o3        = 0 
+ irad_aero      = 0
+ irad_cfc11     = 0
+ irad_cfc12     = 0
+ albedo_type    = 2 ! Modis albedo
+ vmr_co2        = 348.0e-6 ! values representative for 2012
+ vmr_ch4        = 1650.0e-09
+ vmr_n2o        = 306.0e-09
+ vmr_o2         = 0.20946
+ ecrad_llw_cloud_scat = .FALSE.
+ ecrad_iliquid_scat   = 0 ! 0=SOCRATES, 1=slingo
+ ecrad_iice_scat      = 0 ! 0=Fu , 1=Baran
+/
+&interpol_nml
+ nudge_zone_width  = 8
+/
+&gridref_nml
+ grf_intmethod_ct = 2
+ grf_tracfbk      = 2
+ denom_diffu_v    = 150.
+/
+&nonhydrostatic_nml
+ iadv_rhotheta = 2
+ ivctype       = 2
+ itime_scheme   = 5
+ damp_height  = 20000.
+ rayleigh_coeff = 0.75
+ exner_expol = 0.333
+ vwind_offctr = 0.20
+ igradp_method = 5
+ l_zdiffu_t    = .true.
+ thslp_zdiffu   = 0.05
+ thhgtd_zdiffu  = 125.
+ divdamp_fac   = 0.004
+/
+&sleve_nml                    ! vertical grid standard output for message level >= 15
+ min_lay_thckn   = 50.0       ! lowest level thickness (between half-levels), set 0 to do equal spacing
+ top_height      = 30000.
+ stretch_fac     = 0.85       ! stretching towards model top (1.0 default; smaller - bigger top level thickness)
+/
+&io_nml
+ lkeep_in_sync    = .true.
+/
+&extpar_nml
+ itopo          = 0
+ n_iter_smooth_topo = 2
+ heightdiff_threshold = 2000.
+/
+
+
+&output_nml
+ filetype                    =                          4         ! output format: 2=GRIB2, 4=NETCDFv2
+ dom                         =                         -1         ! write all domains
+ output_bounds               =               0., 0., 1800.        ! output: start, end, increment
+ steps_per_file              =                          1         ! number of output steps in one output file
+ mode                        =                          1         ! 1: relative t-axis, 2: absolute t-axis
+ include_last                =                      .TRUE.        ! flag whether to include the last time step
+ output_filename             =        'ICONCONST_icongrid'        ! file name base
+ output_grid                 =                      .TRUE.        ! flag whether grid information is added to output.
+ remap                       =                          0         ! 1: remap to lat-lon grid
+ ml_varlist                  = 'z_ifc','z_mc','topography_c','fr_land','soiltyp','gz0'
+/
+
+! output_nml: specifies an output stream --------------------------------------
+&output_nml
+ filetype                    =                          4  ! output format: 2=GRIB2, 4=NETCDFv2
+ dom                         =                          -1 ! write all domains (1 for 1st domain only)
+ output_bounds               =            0.,360000.,600.  ! start, end, increment
+ steps_per_file              =                          1  ! number of steps per file
+ steps_per_file_inclfirst    =                     .FALSE. ! first step not counted wrt steps_per_file count (otherwise first file contains 2 times)
+ mode                        =                          1  ! 1: forecast mode (relative t-axis), 2: climate mode (absolute t-axis)
+ include_last                =                     .FALSE.
+ output_filename             =          'wk82_torusgrid'
+ filename_format             = '<output_filename>_DOM<physdom>_<datetime2>' ! file name base
+ output_grid                 =                      .TRUE.
+ remap                       =                          0  ! 1: remap to lat-lon grid
+ml_varlist='z_mc', 'u', 'v', 'w', 'omega', 'cape_ml',
+ 'temp', 'pres', 'rho', 'rh', 'tot_prec', 'dbz',
+ 'qv', 'qc', 'qi', 'qr', 'qs', 'qg', 'qh',
+ 'qnc', 'qnr','qni','qns','qng','qnh',
+ 'htop_con', 'hbas_con', 'group:sip', 'group:process_rates',
+ 'group:energy_consv',
+ 'rain_gsp','snow_gsp', 'tot_prec_rate', 'prec_gsp_rate', 'rain_gsp_rate','ice_gsp_rate',
+ 'snow_gsp_rate', 'graupel_gsp_rate', 'hail_gsp_rate',
+/
+EOF
+
+#=============================================================================
+#
+# This section of the run script prepares and starts the model integration. 
+#-----------------------------------------------------------------------------
+
+final_status_file=${EXPDIR}/${job_name}.final_status #!NICOLE
+rm -f ${final_status_file}
+#-----------------------------------------------------------------------------
+
+# set up the model lists if they do not exist
+# this works for single model runs
+# for coupled runs the lists should be declared explicilty
+if [ x$namelist_list = x ]; then
+#  minrank_list=(        0           )
+#  maxrank_list=(     65535          )
+#  incrank_list=(        1           )
+  minrank_list[0]=0
+  maxrank_list[0]=65535
+  incrank_list[0]=1
+  if [ x$atmo_namelist != x ]; then
+    # this is the atmo model
+    namelist_list[0]="$atmo_namelist"
+    modelname_list[0]="atmo"
+    modeltype_list[0]=1
+    run_atmo="true"
+  else
+    check_error 1 "No namelist is defined"
+  fi
+fi
+
+#-----------------------------------------------------------------------------
+# set some default values and derive some run parameteres
+restart=${restart:=".false."}
+restartSemaphoreFilename='isRestartRun.sem'
+#AUTOMATIC_RESTART_SETUP:
+if [ -f ${restartSemaphoreFilename} ]; then
+  restart=.true.
+  #  do not delete switch-file, to enable restart after unintended abort
+  #[[ -f ${restartSemaphoreFilename} ]] && rm ${restartSemaphoreFilename}
+fi
+#END AUTOMATIC_RESTART_SETUP
+#
+# wait 5min to let GPFS finish the write operations
+if [ "x$restart" != 'x.false.' -a "x$submit" != 'x' ]; then
+  if [ x$(df -T ${EXPDIR} | cut -d ' ' -f 2) = gpfs ]; then
+    sleep 10;
+  fi
+fi
+# fill some checks
+
+run_atmo=${run_atmo="false"}
+if [ x$atmo_namelist != x ]; then
+  run_atmo="true"
+fi
+#-----------------------------------------------------------------------------
+# get restart files
+
+if  [ x$restart_atmo_from != "x" ] ; then
+  rm -f restart_atm_DOM01.nc
+#  ln -s ${basedir}/experiments/${restart_from_folder}/${restart_atmo_from} ${EXPDIR}/restart_atm_DOM01.nc
+  cp ${basedir}/experiments/${restart_from_folder}/${restart_atmo_from} cp_restart_atm.nc
+  ln -s cp_restart_atm.nc restart_atm_DOM01.nc
+  restart=".true."
+fi
+if  [ x$restart_ocean_from != "x" ] ; then
+  rm -f restart_oce.nc
+#  ln -s ${basedir}/experiments/${restart_from_folder}/${restart_ocean_from} ${EXPDIR}/restart_oce.nc
+  cp ${basedir}/experiments/${restart_from_folder}/${restart_ocean_from} cp_restart_oce_DOM01.nc
+  ln -s cp_restart_oce_DOM01.nc restart_oce_DOM01.nc
+  restart=".true."
+fi
+#-----------------------------------------------------------------------------
+
+
+read_restart_namelists=${read_restart_namelists:=".true."}
+
+#-----------------------------------------------------------------------------
+#
+# create ICON master namelist
+# ------------------------
+# For a complete list see Namelist_overview and Namelist_overview.pdf
+
+#-----------------------------------------------------------------------------
+# create master_namelist
+master_namelist=icon_master.namelist
+if [ x$end_date = x ]; then
+cat > $master_namelist << EOF
+&master_nml
+ lrestart            = $restart
+/
+&master_time_control_nml
+ experimentStartDate  = "$start_date"
+ restartTimeIntval    = "$restart_interval"
+ checkpointTimeIntval = "$checkpoint_interval"
+/
+&time_nml
+ is_relative_time = .false.
+/
+EOF
+else
+if [ x$calendar = x ]; then
+  calendar='proleptic gregorian'
+  calendar_type=1
+else
+  calendar=$calendar
+  calendar_type=$calendar_type
+fi
+cat > $master_namelist << EOF
+&master_nml
+ lrestart            = $restart
+ read_restart_namelists = $read_restart_namelists
+/
+&master_time_control_nml
+ calendar             = "$calendar"
+ checkpointTimeIntval = "$checkpoint_interval"
+ restartTimeIntval    = "$restart_interval"
+ experimentStartDate  = "$start_date"
+ experimentStopDate   = "$end_date"
+/
+&time_nml
+ is_relative_time = .false.
+/
+EOF
+fi
+#-----------------------------------------------------------------------------
+
+
+#-----------------------------------------------------------------------------
+# add model component to master_namelist
+add_component_to_master_namelist()
+{
+
+  model_namelist_filename="$1"
+  model_name=$2
+  model_type=$3
+  model_min_rank=$4
+  model_max_rank=$5
+  model_inc_rank=$6
+
+cat >> $master_namelist << EOF
+&master_model_nml
+  model_name="$model_name"
+  model_namelist_filename="$model_namelist_filename"
+  model_type=$model_type
+  model_min_rank=$model_min_rank
+  model_max_rank=$model_max_rank
+  model_inc_rank=$model_inc_rank
+/
+EOF
+
+}
+#-----------------------------------------------------------------------------
+
+
+no_of_models=${#namelist_list[*]}
+echo "no_of_models=$no_of_models"
+
+j=0
+while [ $j -lt ${no_of_models} ]
+do
+  add_component_to_master_namelist "${namelist_list[$j]}" "${modelname_list[$j]}" ${modeltype_list[$j]} ${minrank_list[$j]} ${maxrank_list[$j]} ${incrank_list[$j]}
+  j=`expr ${j} + 1`
+done
+
+#-----------------------------------------------------------------------------
+#
+# get model
+#
+ls -l ${MODEL}
+check_error $? "${MODEL} does not exist?"
+#-----------------------------------------------------------------------------
+
+# start experiment
+
+rm -f finish.status
+date
+${START} ${MODEL}
+date
+#
+if [ -r finish.status ] ; then
+  check_final_status 0 "${START} ${MODEL}"
+else
+  check_final_status -1 "${START} ${MODEL}"
+fi
+#
+
+#-----------------------------------------------------------------------------
+#
+finish_status=`cat finish.status`
+echo $finish_status
+echo "============================"
+echo "Script run successfully: $finish_status"
+echo "============================"
+#-----------------------------------------------------------------------------
+namelist_list=""
+#-----------------------------------------------------------------------------
+# check if we have to restart, ie resubmit
+#   Note: this is a different mechanism from checking the restart
+if [ $finish_status = "RESTART" ]; then
+  echo "restart next experiment..."
+  this_script="${RUNSCRIPTDIR}/exp.${EXPNAME}.run"
+  echo 'this_script: ' "$this_script"
+  # note that if ${restartSemaphoreFilename} does not exist yet, then touch will create it
+  touch ${restartSemaphoreFilename}
+  cd ${RUNSCRIPTDIR}
+  sbatch exp.${EXPNAME}.run
+else
+  [[ -f ${restartSemaphoreFilename} ]] && rm ${restartSemaphoreFilename}
+fi
+#-----------------------------------------------------------------------------
+
+#-----------------------------------------------------------------------------
+
+cd ${RUNSCRIPTDIR}
+
+#-----------------------------------------------------------------------------
